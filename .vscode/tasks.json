@@ -1,0 +1,27 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build PicoWake",
+			"type": "shell",
+			"command": "platformio",
+			"args": [
+				"run"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Build PicoWake After WiFi Fix",
+			"type": "shell",
+			"command": "platformio",
+			"args": [
+				"run"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		}
+	]
+}
