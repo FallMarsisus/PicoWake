@@ -1,321 +1,441 @@
 #include <Arduino.h>
 #include "Hardware.h"
-#include <lvgl.h>
 #include "FirstWifiProvisioning.h"
 #include <WiFiNTP.h>
-#include <time.h> // Pour le NTP (Heure internet)
+#include <time.h>
+#include <qrcode.h>
+#include "assets/ronds.h"
+#include "AlarmScheduler.h"
 
-static constexpr bool kBypassWifiProvisioning = true;
-static constexpr uint32_t kLoopStallWarningMs = 80;
-static constexpr bool kProbeDelayLvglInLoop = false;
-static constexpr uint32_t kProbeDelayLvglMs = 5000;
-static constexpr bool kBypassTftFlushForDebug = false;
+static constexpr bool kBypassWifiProvisioning = false;
+static constexpr const char* kApSsid = "PicoWake-Setup";
+static constexpr const char* kApPass = "picowake123";
+static constexpr const char* kPortalUrl = "http://192.168.4.1";
+// "ffo62" interprete comme "ff062" (o -> 0), soit RGB(15,240,98)
+static constexpr uint16_t kClockBgColor = 55499;
 
-static lv_disp_draw_buf_t sDrawBuf;
-static lv_color_t sBuf1[240 * 20];
-
-static lv_obj_t* sLabelTouch = nullptr;
-static lv_obj_t* sLabelHint = nullptr;
-static lv_obj_t* sLabelWifi = nullptr;
-static lv_obj_t* sLabelTime = nullptr; // Nouvelle étiquette pour l'heure
-
+static FirstWifiProvisioning wifiProvisioning;
+static AlarmScheduler alarmScheduler;
 static bool sLastTouchState = false;
 static bool sTimeInitialized = false;
-static FirstWifiProvisioning wifiProvisioning;
+static bool sNtpStarted = false;
+
+enum class UiScreen {
+    Loading,
+    Clock,
+    WifiHelp,
+    AlarmRinging,
+};
+
+static UiScreen sCurrentScreen = UiScreen::Loading;
+static bool sScreenDirty = true;
+static String sLastClock;
+static int sLastActiveCount = -1;
+static uint32_t sLastLoadingAnimMs = 0;
+static uint8_t sLoadingFrame = 0;
+
 static uint32_t sLoopCount = 0;
 static uint32_t sMaxLoopDeltaMs = 0;
-static uint32_t sFlushSeq = 0;
-static uint32_t sLvLoopCalls = 0;
-static bool sTftDmaReady = false;
-static bool sLoopStartedLogged = false;
-static bool sLoopLvglEnabledLogged = false;
 
-static void debug_log_setup(const char* step) {
-    Serial.printf("[BOOT] %lu ms | %s\n", millis(), step);
+static bool systemTimeIsValid() {
+    const time_t nowTs = time(nullptr);
+    const struct tm* timeinfo = localtime(&nowTs);
+    return timeinfo && timeinfo->tm_year > 100;
 }
 
-static void ui_set_wifi_label(const char* text, lv_color_t color) {
-    if (!sLabelWifi) return;
-    lv_label_set_text(sLabelWifi, text);
-    lv_obj_set_style_text_color(sLabelWifi, color, 0);
+static void drawCentered(const String& text, int y, int font, uint16_t fg, uint16_t bg = TFT_BLACK) {
+    tft.setTextColor(fg, bg);
+    tft.drawCentreString(text, tft.width() / 2, y, font);
+}
+
+static void drawQrCode(const char* payload) {
+    uint8_t qrcodeData[qrcode_getBufferSize(4)];
+    QRCode qrcode;
+    qrcode_initText(&qrcode, qrcodeData, 4, ECC_MEDIUM, payload);
+
+    const int size = qrcode.size;
+    const int scale = 4;
+    const int qrPixelSize = size * scale;
+    const int x0 = (tft.width() - qrPixelSize) / 2;
+    const int y0 = tft.height() - qrPixelSize - 8;
+
+    tft.fillRect(x0 - 4, y0 - 4, qrPixelSize + 8, qrPixelSize + 8, TFT_WHITE);
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            if (qrcode_getModule(&qrcode, x, y)) {
+                tft.fillRect(x0 + x * scale, y0 + y * scale, scale, scale, TFT_BLACK);
+            }
+        }
+    }
+}
+
+static void drawLoadingScreen(bool force) {
+    static const int8_t kDotX[8] = {0, 10, 14, 10, 0, -10, -14, -10};
+    static const int8_t kDotY[8] = {-14, -10, 0, 10, 14, 10, 0, -10};
+    const int cx = tft.width() / 2;
+    const int cy = tft.height() / 2;
+
+    if (force) {
+        tft.fillScreen(TFT_BLACK);
+        sLoadingFrame = 0;
+        sLastLoadingAnimMs = 0;
+    }
+
+    if ((millis() - sLastLoadingAnimMs) > 120) {
+        sLastLoadingAnimMs = millis();
+        sLoadingFrame = (sLoadingFrame + 1) % 100;
+
+        tft.fillRect(cx - 20, cy - 20, 40, 40, TFT_BLACK);
+        for (uint8_t i = 0; i < 8; ++i) {
+            const uint8_t idx = (sLoadingFrame / 2 + i) % 8;
+            const uint16_t color = (i == 0) ? TFT_CYAN : ((i <= 2) ? TFT_DARKCYAN : TFT_DARKGREY);
+            tft.fillCircle(cx + kDotX[idx], cy + kDotY[idx], 3, color);
+        }
+    }
+}
+
+static String formatSnoozeText(uint32_t snoozeRemaining) {
+    const uint32_t minutes = snoozeRemaining / 60U;
+    const uint32_t seconds = snoozeRemaining % 60U;
+    char snoozeBuf[16];
+    if (minutes >= 10U) {
+        snprintf(snoozeBuf, sizeof(snoozeBuf), "%02lu:%02lu", static_cast<unsigned long>(minutes), static_cast<unsigned long>(seconds));
+    } else {
+        snprintf(snoozeBuf, sizeof(snoozeBuf), "%lu:%02lu", static_cast<unsigned long>(minutes), static_cast<unsigned long>(seconds));
+    }
+    return String(snoozeBuf);
+}
+
+static void drawSnoozeOverlay(bool force, uint32_t snoozeRemaining) {
+    static int lastOverlayX = -1;
+    static int lastOverlayY = -1;
+    static int lastOverlayW = -1;
+    static int lastOverlayH = -1;
+
+    const int w = tft.width();
+    const int h = tft.height();
+
+    if (force || snoozeRemaining == 0) {
+        if (lastOverlayW > 0 && lastOverlayH > 0) {
+            tft.fillRoundRect(lastOverlayX - 2, lastOverlayY - 2, lastOverlayW + 4, lastOverlayH + 4, 12, kClockBgColor);
+        }
+        lastOverlayX = -1;
+        lastOverlayY = -1;
+        lastOverlayW = -1;
+        lastOverlayH = -1;
+        return;
+    }
+
+    const String snoozeText = formatSnoozeText(snoozeRemaining);
+    const int textW = tft.textWidth(snoozeText, 2);
+    const int iconW = 24;
+    const int gap = 8;
+    const int paddingX = 12;
+    const int barH = 32;
+    int barW = iconW + gap + textW + (paddingX * 2);
+    if (barW < 92) {
+        barW = 92;
+    }
+    if (barW > 156) {
+        barW = 156;
+    }
+
+    const int barX = (w - barW) / 2;
+    const int barY = h - barH - 8;
+
+    if (lastOverlayW > 0 && lastOverlayH > 0) {
+        tft.fillRoundRect(lastOverlayX - 2, lastOverlayY - 2, lastOverlayW + 4, lastOverlayH + 4, 12, kClockBgColor);
+    }
+
+    tft.fillRoundRect(barX, barY, barW, barH, 12, TFT_BLACK);
+    tft.drawRoundRect(barX, barY, barW, barH, 12, TFT_DARKGREY);
+    tft.drawBitmap(barX + paddingX, barY + 4, alarm, 24, 24, TFT_WHITE);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString(snoozeText, barX + paddingX + iconW + gap, barY + 9, 2);
+
+    lastOverlayX = barX;
+    lastOverlayY = barY;
+    lastOverlayW = barW;
+    lastOverlayH = barH;
+}
+
+static void drawClockScreen(bool force, const String& clockText) {
+    const int activeCount = static_cast<int>(alarmScheduler.activeEnabledCount());
+    const bool snoozeVisible = alarmScheduler.hasSnooze();
+    const uint32_t snoozeRemaining = snoozeVisible ? alarmScheduler.snoozeRemainingSeconds() : 0;
+    static int lastSnoozeRemaining = -1;
+    static bool lastSnoozeVisible = false;
+
+    if (force) {
+        tft.fillScreen(kClockBgColor);
+        tft.drawBitmap(0, 0, BmpRonds, 320, 240, TFT_WHITE);
+        sLastClock = "";
+        sLastActiveCount = -1;
+        lastSnoozeRemaining = -1;
+        lastSnoozeVisible = false;
+    }
+
+    const bool baseChanged = force || clockText != sLastClock || activeCount != sLastActiveCount;
+    if (baseChanged) {
+        tft.fillScreen(kClockBgColor);
+        tft.drawBitmap(0, 0, BmpRonds, 320, 240, TFT_WHITE);
+
+        tft.drawBitmap(8, 8, alarm, 24, 24, TFT_WHITE);
+        tft.setTextColor(TFT_WHITE, kClockBgColor);
+        tft.setTextDatum(TL_DATUM);
+        tft.setTextSize(2);
+        tft.drawString(String(activeCount), 40, 4, 2);
+        tft.setTextSize(1);
+
+        tft.setTextColor(TFT_WHITE, kClockBgColor);
+        tft.setTextDatum(TR_DATUM);
+        tft.setTextSize(2);
+        tft.drawString(clockText, tft.width() - 8, 8, 4);
+        tft.setTextSize(1);
+
+        sLastClock = clockText;
+        sLastActiveCount = activeCount;
+    }
+
+    if (snoozeVisible && snoozeRemaining > 0) {
+        if (baseChanged || !lastSnoozeVisible || static_cast<int>(snoozeRemaining) != lastSnoozeRemaining) {
+            drawSnoozeOverlay(baseChanged, snoozeRemaining);
+            lastSnoozeRemaining = static_cast<int>(snoozeRemaining);
+            lastSnoozeVisible = true;
+        }
+    } else if (lastSnoozeVisible) {
+        drawSnoozeOverlay(true, 0);
+        lastSnoozeRemaining = -1;
+        lastSnoozeVisible = false;
+    }
+}
+
+static void drawRingingScreen(bool force) {
+    static String lastClock;
+    static String lastLabel;
+
+    String clockText = "--:--";
+    String alarmLabel = alarmScheduler.currentRingingLabel();
+    const time_t nowTs = time(nullptr);
+    const struct tm* timeinfo = localtime(&nowTs);
+    if (timeinfo && timeinfo->tm_year > 100) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
+        clockText = String(buf);
+    }
+
+    if (force) {
+        tft.fillScreen(TFT_BLACK);
+        lastClock = "";
+        lastLabel = "";
+    }
+
+    if (clockText != lastClock || alarmLabel != lastLabel) {
+        const int w = tft.width();
+        const int h = tft.height();
+        const int cx = w / 2;
+
+        tft.fillScreen(TFT_BLACK);
+
+        if (alarmLabel.length() > 0) {
+            tft.setTextDatum(MC_DATUM);
+            tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+            tft.setTextSize(1);
+            tft.drawString(alarmLabel, cx, h / 2 - 72, 2);
+        }
+
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.setTextSize(3);
+        tft.drawString(clockText, cx, h / 2 - 34 + 25, 4);
+        tft.setTextSize(1);
+
+        const int btnW = 156;
+        const int btnH = 44;
+        const int btnX = (w - btnW) / 2;
+        const int btnY = h / 2 + 34;
+
+        // Bouton arrondi simple blanc
+        tft.fillRoundRect(btnX, btnY, btnW, btnH, 12, TFT_WHITE);
+        tft.drawRoundRect(btnX, btnY, btnW, btnH, 12, TFT_LIGHTGREY);
+
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        tft.drawString("Arreter", cx, btnY + btnH / 2 + 3, 4);
+
+        lastClock = clockText;
+        lastLabel = alarmLabel;
+    }
+}
+
+static void drawWifiHelpScreen(bool force) {
+    if (!force) {
+        return;
+    }
+
+    tft.fillScreen(TFT_BLACK);
+    drawCentered("Echec connexion WiFi", 8, 2, TFT_RED);
+    tft.drawFastHLine(0, 28, tft.width(), TFT_DARKGREY);
+
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("1) Connecte-toi au reseau:", 8, 36, 2);
+    tft.drawString(kApSsid, 8, 54, 4);
+    tft.drawString("2) Mot de passe:", 8, 84, 2);
+    tft.drawString(kApPass, 8, 102, 2);
+    tft.drawString("3) Ouvre:", 8, 120, 2);
+    tft.drawString(kPortalUrl, 8, 138, 2);
+
+    drawQrCode("WIFI:T:WPA;S:PicoWake-Setup;P:picowake123;;");
 }
 
 static void setup_wifi_first_connection() {
     if (kBypassWifiProvisioning) {
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
-        ui_set_wifi_label("WiFi: bypass debug actif", lv_color_hex(0xFFB38A));
-        Serial.println("[WIFI] Bypass actif: provisioning et AP desactives pour debug freeze");
+        Serial.println("[WIFI] bypass actif (WiFi OFF)");
         return;
     }
 
-    wifiProvisioning.begin("PicoWake-Setup", "picowake123");
-    ui_set_wifi_label("WiFi: tentative connexion...", lv_color_hex(0xF4DFA5));
+    wifiProvisioning.begin(kApSsid, kApPass);
     wifiProvisioning.connectStoredAsync(12000);
 
     if (!wifiProvisioning.isConnected() && !wifiProvisioning.isConnecting()) {
         wifiProvisioning.startPortal();
-        ui_set_wifi_label("WiFi: portail de config actif", lv_color_hex(0xFFB38A));
     }
 }
 
-static void lvgl_flush_cb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {
-    const uint32_t flushId = ++sFlushSeq;
-    const uint32_t flushStartUs = micros();
-    if (flushId <= 8) {
-        Serial.printf(
-            "[LVGL] flush #%lu ENTER area=(%d,%d)-(%d,%d)\n",
-            static_cast<unsigned long>(flushId),
-            area->x1,
-            area->y1,
-            area->x2,
-            area->y2
-        );
+static UiScreen decideScreen() {
+    if (alarmScheduler.isRinging()) {
+        return UiScreen::AlarmRinging;
     }
-
-    if (kBypassTftFlushForDebug) {
-        if (flushId <= 8) {
-            Serial.printf("[LVGL] flush #%lu BYPASS (no TFT write)\n", static_cast<unsigned long>(flushId));
-        }
-        lv_disp_flush_ready(disp);
-        return;
+    if (kBypassWifiProvisioning) {
+        return UiScreen::Loading;
     }
-
-    const uint16_t w = static_cast<uint16_t>(area->x2 - area->x1 + 1);
-    const uint16_t h = static_cast<uint16_t>(area->y2 - area->y1 + 1);
-
-    if (flushId <= 8) {
-        Serial.printf("[LVGL] flush #%lu stage startWrite\n", static_cast<unsigned long>(flushId));
+    if (wifiProvisioning.isPortalActive()) {
+        return UiScreen::WifiHelp;
     }
-
-    tft.startWrite();
-    if (flushId <= 8) {
-        Serial.printf("[LVGL] flush #%lu stage setAddrWindow\n", static_cast<unsigned long>(flushId));
+    if (!sTimeInitialized) {
+        return UiScreen::Loading;
     }
-    tft.setAddrWindow(area->x1, area->y1, w, h);
-
-    if (sTftDmaReady) {
-        if (flushId <= 8) {
-            Serial.printf("[LVGL] flush #%lu stage pushPixelsDMA\n", static_cast<unsigned long>(flushId));
-        }
-        tft.pushPixelsDMA(reinterpret_cast<uint16_t*>(color_p), static_cast<uint32_t>(w) * h);
-        if (flushId <= 8) {
-            Serial.printf("[LVGL] flush #%lu stage dmaWait\n", static_cast<unsigned long>(flushId));
-        }
-        tft.dmaWait();
-    } else {
-        if (flushId <= 8) {
-            Serial.printf("[LVGL] flush #%lu stage pushColors\n", static_cast<unsigned long>(flushId));
-        }
-        tft.pushColors(reinterpret_cast<uint16_t*>(color_p), static_cast<uint32_t>(w) * h, true);
+    if (wifiProvisioning.isConnected()) {
+        return UiScreen::Clock;
     }
-
-    if (flushId <= 8) {
-        Serial.printf("[LVGL] flush #%lu stage endWrite\n", static_cast<unsigned long>(flushId));
-    }
-    tft.endWrite();
-
-    if (flushId <= 8) {
-        Serial.printf(
-            "[LVGL] flush #%lu EXIT in %lu us\n",
-            static_cast<unsigned long>(flushId),
-            static_cast<unsigned long>(micros() - flushStartUs)
-        );
-    }
-
-    lv_disp_flush_ready(disp);
-}
-
-static void init_lvgl_ui() {
-    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0E1A2B), 0);
-    lv_obj_set_style_bg_grad_color(lv_scr_act(), lv_color_hex(0x1E3A5F), 0);
-    lv_obj_set_style_bg_grad_dir(lv_scr_act(), LV_GRAD_DIR_VER, 0);
-
-    lv_obj_t* title = lv_label_create(lv_scr_act());
-    lv_label_set_text(title, "PicoWake");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xEAF2FF), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-
-    sLabelTouch = lv_label_create(lv_scr_act());
-    lv_label_set_text(sLabelTouch, "Touch: relache");
-    lv_obj_set_style_text_color(sLabelTouch, lv_color_hex(0xB5D7FF), 0);
-    lv_obj_set_style_text_font(sLabelTouch, &lv_font_montserrat_14, 0);
-    lv_obj_align(sLabelTouch, LV_ALIGN_CENTER, 0, -20);
-
-    sLabelHint = lv_label_create(lv_scr_act());
-    lv_label_set_text(sLabelHint, "Tap capteur GP0");
-    lv_obj_set_style_text_color(sLabelHint, lv_color_hex(0x8FAED0), 0);
-    lv_obj_set_style_text_font(sLabelHint, &lv_font_montserrat_14, 0);
-    lv_obj_align(sLabelHint, LV_ALIGN_CENTER, 0, 10);
-
-    // Initialisation de l'étiquette pour l'heure (masquée par défaut)
-    sLabelTime = lv_label_create(lv_scr_act());
-    lv_label_set_text(sLabelTime, "");
-    lv_obj_set_style_text_color(sLabelTime, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(sLabelTime, &lv_font_montserrat_48, 0);
-    lv_obj_align(sLabelTime, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_flag(sLabelTime, LV_OBJ_FLAG_HIDDEN);
-
-    sLabelWifi = lv_label_create(lv_scr_act());
-    lv_label_set_text(sLabelWifi, "WiFi: non initialise");
-    lv_obj_set_style_text_color(sLabelWifi, lv_color_hex(0xF4DFA5), 0);
-    lv_obj_set_style_text_font(sLabelWifi, &lv_font_montserrat_14, 0);
-    lv_obj_align(sLabelWifi, LV_ALIGN_BOTTOM_MID, 0, -12);
+    return UiScreen::Clock;
 }
 
 void setup() {
     hardware_init();
-    debug_log_setup("hardware_init termine");
+    Serial.printf("[BOOT] %lu ms | hardware_init termine\n", millis());
 
-    sTftDmaReady = tft.initDMA();
-    Serial.printf("[BOOT] %lu ms | tft.initDMA=%d\n", millis(), sTftDmaReady ? 1 : 0);
+    alarmScheduler.begin();
 
-    // Suppression du hardware_self_test();
+    drawLoadingScreen(true);
 
-    lv_init();
-    debug_log_setup("lv_init termine");
-    lv_disp_draw_buf_init(&sDrawBuf, sBuf1, nullptr, sizeof(sBuf1) / sizeof(sBuf1[0]));
-    debug_log_setup("draw buffer LVGL initialise");
-
-    lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = tft.width();
-    disp_drv.ver_res = tft.height();
-    disp_drv.flush_cb = lvgl_flush_cb;
-    disp_drv.draw_buf = &sDrawBuf;
-    lv_disp_t* disp = lv_disp_drv_register(&disp_drv);
-    lv_disp_set_default(disp);
-    debug_log_setup("driver display LVGL enregistre");
-
-    init_lvgl_ui();
-    debug_log_setup("UI LVGL initialisee");
-    lv_timer_handler();
-    debug_log_setup("premier lv_timer_handler execute");
     setup_wifi_first_connection();
-    debug_log_setup("setup_wifi_first_connection termine");
+    Serial.printf("[BOOT] %lu ms | setup_wifi termine\n", millis());
 }
 
 void loop() {
-    static uint32_t lastTickMs = millis();
-    const uint32_t now = millis();
-    const uint32_t loopDeltaMs = now - lastTickMs;
-    lv_tick_inc(loopDeltaMs);
-    lastTickMs = now;
+    static uint32_t lastLoopMs = millis();
+    const uint32_t nowMs = millis();
+    const uint32_t loopDeltaMs = nowMs - lastLoopMs;
+    lastLoopMs = nowMs;
     ++sLoopCount;
-
-    if (!sLoopStartedLogged) {
-        sLoopStartedLogged = true;
-        Serial.printf("[BOOT] %lu ms | loop started\n", millis());
-    }
 
     if (loopDeltaMs > sMaxLoopDeltaMs) {
         sMaxLoopDeltaMs = loopDeltaMs;
     }
-    if (loopDeltaMs > kLoopStallWarningMs) {
-        Serial.printf("[WARN] Stall loop detecte: %lu ms (seuil %lu ms)\n", loopDeltaMs, static_cast<unsigned long>(kLoopStallWarningMs));
-    }
 
     hardware_update();
-    if (!kBypassWifiProvisioning) {
-        wifiProvisioning.loop();
-    }
-
-    if (!kBypassWifiProvisioning && !wifiProvisioning.isConnected() && !wifiProvisioning.isConnecting() && !wifiProvisioning.isPortalActive()) {
-        wifiProvisioning.startPortal();
-        ui_set_wifi_label("WiFi: portail de config actif", lv_color_hex(0xFFB38A));
-    }
-
-    // --- GESTION DU WIFI ET DE L'HEURE ---
-    if (!kBypassWifiProvisioning && wifiProvisioning.isConnected()) {
-        // Initialiser l'heure internet (NTP) une seule fois
-        if (!sTimeInitialized) {
-            NTP.begin("pool.ntp.org", 3600);
-            setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1); // Fuseau horaire Paris
-            tzset();
-            sTimeInitialized = true;
-            
-            // Masquer les labels de dev et afficher l'heure
-            lv_obj_add_flag(sLabelTouch, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(sLabelHint, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(sLabelTime, LV_OBJ_FLAG_HIDDEN);
-        }
-
-        // Mettre à jour l'affichage de l'heure chaque seconde
-        static uint32_t lastTimeUpdate = 0;
-        if (millis() - lastTimeUpdate > 1000) {
-            lastTimeUpdate = millis();
-            time_t now = time(nullptr);
-            struct tm* timeinfo = localtime(&now);
-            
-            if (timeinfo->tm_year > 100) { // Si l'année est > 2000, l'heure est synchronisée
-                char timeStr[16];
-                snprintf(timeStr, sizeof(timeStr), "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
-                lv_label_set_text(sLabelTime, timeStr);
+    const bool touch = hardware_touch_pressed();
+    if (touch != sLastTouchState) {
+        sLastTouchState = touch;
+        if (touch) {
+            if (alarmScheduler.isRinging()) {
+                alarmScheduler.dismissRinging();
+                sScreenDirty = true;
             } else {
-                lv_label_set_text(sLabelTime, "--:--");
+                hardware_buzzer_beep(30);
             }
         }
     }
 
-    static uint32_t wifiLabelRefreshMs = 0;
-    if (!kBypassWifiProvisioning && (millis() - wifiLabelRefreshMs) > 1000) {
-        wifiLabelRefreshMs = millis();
-        const String wifiStatus = wifiProvisioning.statusMessage();
-        if (wifiStatus.length() > 0) {
-            ui_set_wifi_label(wifiStatus.c_str(), wifiProvisioning.isConnected() ? lv_color_hex(0x92F2B3) : lv_color_hex(0xF4DFA5));
+    if (hardware_snooze_rising_edge()) {
+        if (alarmScheduler.isRinging()) {
+            alarmScheduler.snoozeRinging(10);
+            sScreenDirty = true;
         }
     }
 
-    const bool touch = hardware_touch_pressed();
-
-    if (touch != sLastTouchState) {
-        sLastTouchState = touch;
-        if (touch) {
-            if(!sTimeInitialized) lv_label_set_text(sLabelTouch, "Touch: appuye");
-            hardware_buzzer_beep(30);
-        } else {
-            if(!sTimeInitialized) lv_label_set_text(sLabelTouch, "Touch: relache");
+    if (!kBypassWifiProvisioning) {
+        wifiProvisioning.loop();
+        if (!wifiProvisioning.isConnected() && !wifiProvisioning.isConnecting() && !wifiProvisioning.isPortalActive()) {
+            wifiProvisioning.startPortal();
         }
     }
 
-    uint32_t lvDurationUs = 0;
-    const bool lvglEnabledInLoop = !kProbeDelayLvglInLoop || (millis() >= kProbeDelayLvglMs);
-    if (lvglEnabledInLoop) {
-        if (!sLoopLvglEnabledLogged) {
-            sLoopLvglEnabledLogged = true;
-            Serial.printf("[LVGL] loop handler active at %lu ms\n", millis());
+    if (!kBypassWifiProvisioning && wifiProvisioning.isConnected()) {
+        if (!sNtpStarted) {
+            NTP.begin("pool.ntp.org", 3600);
+            setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+            tzset();
+            sNtpStarted = true;
         }
-        ++sLvLoopCalls;
-        if (sLvLoopCalls <= 8) {
-            Serial.printf("[LVGL] handler #%lu ENTER\n", static_cast<unsigned long>(sLvLoopCalls));
+        if (!sTimeInitialized) {
+            sTimeInitialized = systemTimeIsValid();
+            if (sTimeInitialized) {
+                sScreenDirty = true;
+            }
         }
-        const uint32_t lvStartUs = micros();
-        lv_timer_handler();
-        lvDurationUs = micros() - lvStartUs;
-        if (sLvLoopCalls <= 8) {
-            Serial.printf(
-                "[LVGL] handler #%lu EXIT in %lu us\n",
-                static_cast<unsigned long>(sLvLoopCalls),
-                static_cast<unsigned long>(lvDurationUs)
-            );
-        }
+    } else if (!sTimeInitialized) {
+        sNtpStarted = false;
     }
+
+    if (!kBypassWifiProvisioning && wifiProvisioning.isConnected()) {
+        alarmScheduler.ensureWebStarted("picowake");
+    } else {
+        alarmScheduler.stopWeb();
+    }
+    alarmScheduler.loop();
+
+    const UiScreen nextScreen = decideScreen();
+    if (nextScreen != sCurrentScreen) {
+        sCurrentScreen = nextScreen;
+        sScreenDirty = true;
+    }
+
+    if (sCurrentScreen == UiScreen::AlarmRinging) {
+        drawRingingScreen(sScreenDirty);
+    } else if (sCurrentScreen == UiScreen::Loading) {
+        drawLoadingScreen(sScreenDirty);
+    } else if (sCurrentScreen == UiScreen::Clock) {
+        String clockText = "--:--";
+        const time_t now = time(nullptr);
+        const struct tm* timeinfo = localtime(&now);
+        if (timeinfo && timeinfo->tm_year > 100) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
+            clockText = String(buf);
+        }
+        drawClockScreen(sScreenDirty, clockText);
+    } else {
+        drawWifiHelpScreen(sScreenDirty);
+    }
+
+    sScreenDirty = false;
 
     static uint32_t lastDebugMs = 0;
-    if ((millis() - lastDebugMs) > 1000) {
-        lastDebugMs = millis();
+    if ((nowMs - lastDebugMs) > 1000) {
+        lastDebugMs = nowMs;
         Serial.printf(
-            "[DBG] uptime=%lu ms | loops=%lu | maxDelta=%lu ms | lv=%lu us | lvLoop=%d | flushes=%lu | touch=%d | wifiBypass=%d\n",
-            millis(),
+            "[DBG] uptime=%lu ms | loops=%lu | maxDelta=%lu ms | touch=%d | wifiBypass=%d | screen=%d\n",
+            nowMs,
             static_cast<unsigned long>(sLoopCount),
             static_cast<unsigned long>(sMaxLoopDeltaMs),
-            static_cast<unsigned long>(lvDurationUs),
-            lvglEnabledInLoop ? 1 : 0,
-            static_cast<unsigned long>(sFlushSeq),
-            hardware_touch_pressed() ? 1 : 0,
-            kBypassWifiProvisioning ? 1 : 0
+            touch ? 1 : 0,
+            kBypassWifiProvisioning ? 1 : 0,
+            static_cast<int>(sCurrentScreen)
         );
         sMaxLoopDeltaMs = 0;
     }

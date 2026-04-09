@@ -7,6 +7,7 @@
 
 // --- PINS PRINCIPAUX ---
 constexpr uint8_t PIN_TOUCH_TTP223 = 0; // GP0
+constexpr uint8_t PIN_SNOOZE_BUTTON = 1; // GP1
 constexpr uint8_t PIN_BUZZER_ACTIVE = 14; // GP14
 constexpr uint8_t PIN_TFT_BL = 13; // GP13
 
@@ -40,5 +41,7 @@ void hardware_buzzer_beep(uint16_t durationMs = 60);
 // Etat courant du capteur tactile TTP223.
 bool hardware_touch_pressed();
 bool hardware_touch_rising_edge();
+bool hardware_snooze_pressed();
+bool hardware_snooze_rising_edge();
 
 #endif

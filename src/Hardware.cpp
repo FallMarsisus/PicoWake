@@ -13,6 +13,9 @@ TFT_eSPI tft = TFT_eSPI();
 static bool sTouchPressed = false;
 static bool sTouchPrev = false;
 static bool sTouchRisingEdge = false;
+static bool sSnoozePressed = false;
+static bool sSnoozePrev = false;
+static bool sSnoozeRisingEdge = false;
 
 void hardware_buzzer_on() {
     digitalWrite(PIN_BUZZER_ACTIVE, HIGH);
@@ -38,10 +41,24 @@ bool hardware_touch_rising_edge() {
     return edge;
 }
 
+bool hardware_snooze_pressed() {
+    return sSnoozePressed;
+}
+
+bool hardware_snooze_rising_edge() {
+    const bool edge = sSnoozeRisingEdge;
+    sSnoozeRisingEdge = false;
+    return edge;
+}
+
 void hardware_update() {
     sTouchPressed = (digitalRead(PIN_TOUCH_TTP223) == HIGH);
     sTouchRisingEdge = (!sTouchPrev && sTouchPressed);
     sTouchPrev = sTouchPressed;
+
+    sSnoozePressed = (digitalRead(PIN_SNOOZE_BUTTON) == LOW);
+    sSnoozeRisingEdge = (!sSnoozePrev && sSnoozePressed);
+    sSnoozePrev = sSnoozePressed;
 }
 
 void hardware_init() {
@@ -54,6 +71,7 @@ void hardware_init() {
     pinMode(PIN_BUZZER_ACTIVE, OUTPUT);
     hardware_buzzer_off();
     pinMode(PIN_TOUCH_TTP223, INPUT);
+    pinMode(PIN_SNOOZE_BUTTON, INPUT_PULLUP);
 
     Serial.begin(115200);
 
@@ -77,7 +95,6 @@ void hardware_init() {
     // L'écran utilise SPI1 (GP10, 11, 12) défini dans User_Setup.h de TFT_eSPI
     tft.init();
     tft.setRotation(3); 
-    tft.setSwapBytes(true);
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("SYSTEM BOOT...", 5, 5, 2);
