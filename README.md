@@ -1,4 +1,4 @@
-# PicoWake (Tomat'O-Clock) 🍅⏰
+# PicoWake (Tomat'O-Clock) 🍅
 
 Meet **Tomat'O-Clock**, a smart, connected, tomato-shaped alarm clock! 
 
@@ -6,7 +6,7 @@ This repository contains the source code and documentation for the PicoWake proj
 
 The physical build features a capacitive touch sensor for dismissing alarms and a mechanical keyboard switch hidden in the tomato's stem acting as the "Snooze" button.
 
-## ✨ Features
+## Features
 * **Captive WiFi Portal:** Easy network setup on first boot.
 * **NTP Time Sync:** Always keeps accurate time over the internet.
 * **Local Web UI:** Set multiple alarms, adjust volume, and manage days directly from your browser.
@@ -15,7 +15,7 @@ The physical build features a capacitive touch sensor for dismissing alarms and 
 
 ---
 
-## 🚀 Software Setup & Flashing
+## Setup & Flashing
 
 The source code is written using the **Arduino framework** via **PlatformIO**.
 
@@ -35,7 +35,7 @@ The source code is written using the **Arduino framework** via **PlatformIO**.
 
 ---
 
-## 🔌 Pinout & Wiring
+## Pinout & Wiring
 
 The Pico is designed to be embedded directly into the back of the Waveshare screen. Solder the peripherals directly to the Pico's pins or the screen's exposed pads.
 
@@ -48,7 +48,7 @@ The Pico is designed to be embedded directly into the back of the Waveshare scre
 
 ---
 
-## 🛠️ Hardware & Bill of Materials (BOM)
+## Hardware & Bill of Materials (BOM)
 
 *(Note: For 3D printing files and physical assembly guides, please refer to the project's MakerWorld page).*
 
@@ -61,7 +61,7 @@ The Pico is designed to be embedded directly into the back of the Waveshare scre
 * **Hardware (Optional):** M3 threaded inserts and M3 screws (for the backplate).
 * **Miscellaneous:** Flexible wires, soldering iron, and glue.
 
-## 🏗️ Physical Assembly Overview
+## Physical Assembly
 
 1. **Prepare the Screen:** Plug the Pico 2 W into the back of the Waveshare screen.
 2. **Solder Components:** Cut wires to generous lengths and solder the touch sensor, buzzer, and USB-C port to the Pico.
