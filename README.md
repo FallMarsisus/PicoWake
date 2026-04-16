@@ -1,35 +1,71 @@
-# PicoWake (Meet Tomat'O-Clock)
-Meet Tomat'O-Clock, a cute and smart tomato-shaped connected alarm clock! This project uses a Raspberry Pi Pico 2 W, a touch screen, and a few simple electronic components to create a fully configurable alarm clock.
+# PicoWake (Tomat'O-Clock) 🍅⏰
 
-The tomato's stem uses an actual mechanical keyboard switch acting like a "Snooze" button.
+Meet **Tomat'O-Clock**, a smart, connected, tomato-shaped alarm clock! 
 
-## Bill of Materials
-* **Microcontroller:** Raspberry Pi Pico 2 W (A classic Pico W should also work, I didn't test it though).
-* **Display:** Waveshare Pico ResTouch LCD 2.8" (Waveshare Link). The Pico plugs directly into its back, once you're finished building, it goes straight on the front.
-* **Touch Sensor:** TTP223 Capacitive Touch Module (AliExpress Link). This will be hidden behind the front bezel to easily dismiss the alarm with a tap, you'll notice the hole in the structure to insert it.
-* **Snooze Button:** Any mechanical keyboard switch of your choice.
-* **Sound:** A standard passive buzzer.
-* **Power:** A basic 4-pin Type-C USB breakout board (AliExpress Link). (Note: This could be upgraded to a module that supports USB-C to USB-C charging in the future).
-* **Hardware (Optional):** M3 threaded inserts and M3 screws (only if you want to use the optional backplate).
-* **Miscellaneous:** Flexible wires (make sure they are long enough!), soldering iron, and some glue.
+This repository contains the source code and documentation for the PicoWake project. Built around a Raspberry Pi Pico 2 W and a touch screen, this project provides a fully configurable alarm clock with a Web UI, WiFi setup portal, and NTP time synchronization. 
 
-## Wiring
-The Pico is designed to be embedded directly into the back of the Waveshare screen. You will need to solder your wires directly to the Pico's pins (or the screen's exposed pads) to connect the peripherals. All wiring will be hidden inside the tomato shell.
+The physical build features a capacitive touch sensor for dismissing alarms and a mechanical keyboard switch hidden in the tomato's stem acting as the "Snooze" button.
 
-* **TTP223 Touch Sensor (Dismiss):** Connect the signal pin to GP0.
-* **Keyboard Switch (Snooze):** Connect one pin to GP1 and the other to GND (the code uses the internal INPUT_PULLUP resistor).
-* **Passive Buzzer:** Connect the positive/signal pin to GP14.
-* **USB-C Port:** Connect the VBUS/VCC/+ from the USB-C board to the VBUS on the Pico, and GND/- to GND.
+## ✨ Features
+* **Captive WiFi Portal:** Easy network setup on first boot.
+* **NTP Time Sync:** Always keeps accurate time over the internet.
+* **Local Web UI:** Set multiple alarms, adjust volume, and manage days directly from your browser.
+* **Touch Screen Interface:** Interactive local display.
+* **Custom Hardware Controls:** Capacitive touch to dismiss, mechanical switch to snooze.
 
-## Building
-1. **Prepare the Screen:** Plug the Raspberry Pi Pico 2 W into the back of the Waveshare screen.
-2. **Solder the Components:** Cut your wires to a generous length. Solder the touch sensor, the buzzer, and the power wires directly to the corresponding pins on the Pico.
-3. **Mount the USB-C Port:** Simply glue it at the back of the shell, aligned with the backplate.
-4. **Mount the Stem (Snooze) - ⚠️ Crucial Step:** First, route the wires meant for the mechanical switch through the top hole of the tomato shell. Only after passing the wires through, solder them to your keyboard switch. Once soldered, click the switch into its housing.
-5. **Hide the Touch Sensor:** Glue or mount the TTP223 sensor inside the shell, right behind the front face.
-6. **Closing Up (Optional):** You can leave the back open for easy access, or seal it up using the backplate, M3 heat-set inserts, and M3 screws.
+---
 
-## Flashing the firmware
-The complete source code is written using the Arduino framework via PlatformIO. It handles everything: creating a WiFi setup portal on the first boot, syncing the time via NTP, and hosting a sleek Web UI on your local network to let you set multiple alarms, adjust the volume, and manage days.
+## 🚀 Software Setup & Flashing
 
-You can find the full code, along with flashing instructions here: [GitHub](https://github.com/FallMarsisus/PicoWake)
+The source code is written using the **Arduino framework** via **PlatformIO**.
+
+### Prerequisites
+* [VSCode](https://code.visualstudio.com/) with the [PlatformIO extension](https://platformio.org/) installed.
+* Git
+
+### Building and Flashing
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/FallMarsisus/PicoWake.git
+   ```
+2. Open the `PicoWake` project folder in VSCode. PlatformIO will automatically initialize the environment and download dependencies.
+3. Plug your Raspberry Pi Pico 2 W into your computer via USB.
+4. Click the **"Upload"** arrow in the PlatformIO bottom toolbar to compile and flash the firmware.
+5. Once flashed, the Pico will restart. On the first boot, it will create a temporary WiFi Access Point. Connect to it with your phone or computer to configure your local WiFi credentials.
+
+---
+
+## 🔌 Pinout & Wiring
+
+The Pico is designed to be embedded directly into the back of the Waveshare screen. Solder the peripherals directly to the Pico's pins or the screen's exposed pads.
+
+| Component | Pico Pin | Notes |
+| :--- | :--- | :--- |
+| **TTP223 Touch Sensor** (Dismiss) | `GP0` | Signal pin |
+| **Keyboard Switch** (Snooze) | `GP1`, `GND` | Code uses internal `INPUT_PULLUP` |
+| **Passive Buzzer** | `GP14` | Positive/Signal pin |
+| **USB-C Port** | `VBUS`, `GND` | Power delivery |
+
+---
+
+## 🛠️ Hardware & Bill of Materials (BOM)
+
+*(Note: For 3D printing files and physical assembly guides, please refer to the project's MakerWorld page).*
+
+* **Microcontroller:** [Raspberry Pi Pico 2 W](https://www.raspberrypi.com/products/raspberry-pi-pico-2-w/) (A classic Pico W should also work).
+* **Display:** Waveshare Pico ResTouch LCD 2.8". The Pico plugs directly into its back.
+* **Touch Sensor:** TTP223 Capacitive Touch Module.
+* **Snooze Button:** Any mechanical keyboard switch.
+* **Sound:** Standard passive buzzer.
+* **Power:** 4-pin Type-C USB breakout board.
+* **Hardware (Optional):** M3 threaded inserts and M3 screws (for the backplate).
+* **Miscellaneous:** Flexible wires, soldering iron, and glue.
+
+## 🏗️ Physical Assembly Overview
+
+1. **Prepare the Screen:** Plug the Pico 2 W into the back of the Waveshare screen.
+2. **Solder Components:** Cut wires to generous lengths and solder the touch sensor, buzzer, and USB-C port to the Pico.
+3. **Mount the USB-C Port:** Secure it at the back of the shell, aligned with the backplate.
+4. **Mount the Stem (Snooze) ⚠️:** Route the wires through the top hole of the shell *before* soldering them to the keyboard switch. Once soldered, click the switch into its housing.
+5. **Hide Touch Sensor:** Mount the TTP223 sensor inside the shell, behind the front face.
+6. **Close Up:** You can leave the back open for easy access or seal it using the backplate, M3 inserts, and screws.
