@@ -20,6 +20,9 @@ public:
     String currentRingingLabel() const;
     bool hasSnooze() const;
     uint32_t snoozeRemainingSeconds() const;
+    uint16_t nightStartMinuteForDay(uint8_t dayIndex) const;
+    uint16_t nightEndMinuteForDay(uint8_t dayIndex) const;
+    uint32_t settingsVersion() const;
 
 private:
     struct Alarm {
@@ -39,6 +42,9 @@ private:
     bool webRunning_ = false;
     uint16_t nextId_ = 1;
     uint8_t masterVolume_ = 70;
+    uint16_t nightStartMinuteByDay_[7] = {1260, 1260, 1260, 1260, 1260, 1260, 1260};
+    uint16_t nightEndMinuteByDay_[7] = {420, 420, 420, 420, 420, 420, 420};
+    uint32_t settingsVersion_ = 1;
 
     static constexpr size_t kMaxAlarms = 24;
     Alarm alarms_[kMaxAlarms];
@@ -66,6 +72,7 @@ private:
     void handleDeleteAlarm();
     void handleSetVolume();
     void handleSetEnabled();
+    void handleSetNightWindow();
 
     void loadFromDisk();
     void saveToDisk();

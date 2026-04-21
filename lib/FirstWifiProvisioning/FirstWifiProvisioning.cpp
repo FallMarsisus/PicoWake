@@ -74,8 +74,12 @@ bool FirstWifiProvisioning::connectToSaved(uint32_t timeoutMs) {
     }
 
     WIFI_LOG("connectToSaved start ssid=%s timeout=%lu", savedSsid_.c_str(), static_cast<unsigned long>(timeoutMs));
-    WiFi.mode(WIFI_STA);
+
+    // Ensure captive portal AP is fully torn down before STA connect.
+    WiFi.disconnectAP();
     WiFi.disconnect();
+    delay(150);
+    WiFi.mode(WIFI_STA);
     delay(100);
     WiFi.begin(savedSsid_.c_str(), savedPass_.c_str());
 
@@ -117,8 +121,11 @@ void FirstWifiProvisioning::connectStoredAsync(uint32_t timeoutMs) {
         return;
     }
 
-    WiFi.mode(WIFI_STA);
+    // Ensure captive portal AP is fully torn down before STA connect.
+    WiFi.disconnectAP();
     WiFi.disconnect();
+    delay(150);
+    WiFi.mode(WIFI_STA);
     delay(100);
     WiFi.begin(savedSsid_.c_str(), savedPass_.c_str());
 
