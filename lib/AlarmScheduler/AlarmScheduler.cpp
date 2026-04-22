@@ -1,5 +1,5 @@
 #include "AlarmScheduler.h"
-
+#include "AppPage.h"
 #include <ArduinoJson.h>
 #include <LEAmDNS.h>
 
@@ -133,250 +133,35 @@ void AlarmScheduler::loop() {
     updateRing();
 }
 
-void AlarmScheduler::setupRoutes() {
-    server_.on("/", HTTP_GET, [this]() { handleGetRoot(); });
-    server_.on("/api/state", HTTP_GET, [this]() { handleGetState(); });
-    server_.on("/api/alarms", HTTP_POST, [this]() { handleCreateAlarm(); });
-    server_.on("/api/alarms", HTTP_PUT, [this]() { handleUpdateAlarm(); });
-    server_.on("/api/alarms", HTTP_DELETE, [this]() { handleDeleteAlarm(); });
-    server_.on("/api/volume", HTTP_POST, [this]() { handleSetVolume(); });
-    server_.on("/api/enabled", HTTP_POST, [this]() { handleSetEnabled(); });
-    server_.on("/api/night-window", HTTP_POST, [this]() { handleSetNightWindow(); });
-    server_.onNotFound([this]() {
-        server_.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}");
-    });
+void AlarmScheduler::handleGetManifest() {
+    // Ce JSON est requis par Android (Chrome) pour afficher "Ajouter à l'écran d'accueil"
+    String json = R"JSON({
+  "name": "PicoWake",
+  "short_name": "PicoWake",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f16",
+  "theme_color": "#0b0f16",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230b0f16'/><circle cx='50' cy='50' r='30' fill='%232dd4bf'/></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230b0f16'/><circle cx='50' cy='50' r='30' fill='%232dd4bf'/></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+})JSON";
+    server_.send(200, "application/manifest+json", json);
 }
 
+
+
 String AlarmScheduler::buildAppPage() const {
-        return String(F(R"HTML(
-<!doctype html>
-<html>
-<head>
-    <meta charset='utf-8'>
-    <meta name='viewport' content='width=device-width,initial-scale=1'>
-    <title>PicoWake Alarmes</title>
-    <style>
-        :root{--bg:#0b0f16;--bg2:#111826;--card:#141c2c;--ink:#e7eefc;--muted:#95a3bf;--accent:#2dd4bf;--danger:#f87171;--ok:#4ade80;--line:#25324a;}
-        *{box-sizing:border-box}
-        body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:radial-gradient(1200px 600px at 15% -10%,#1b2740 0%,var(--bg) 55%),var(--bg);color:var(--ink);}
-        .wrap{max-width:860px;margin:0 auto;padding:16px;}
-        .card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;}
-        h1{font-size:1.2rem;margin:0 0 12px} h2{font-size:1rem;margin:0 0 10px;color:#d5e4ff}
-        label{font-size:.86rem;color:var(--muted);display:block;margin-bottom:6px}
-        input,button{font:inherit}
-        input[type='time'],input[type='text']{width:100%;padding:9px;border:1px solid #33435f;border-radius:10px;background:#0f1626;color:var(--ink)}
-        button{border:0;border-radius:10px;padding:10px 12px;font-weight:700;background:var(--accent);color:#062422;cursor:pointer}
-        button.ghost{background:#22314a;color:#c6d7f4} button.danger{background:var(--danger);color:#2a0f0f}
-        .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-        .days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
-        .day{padding:7px;border:1px solid #33435f;border-radius:8px;text-align:center;font-size:.82rem;background:#0f1626}
-        .alarm{display:flex;justify-content:space-between;gap:8px;align-items:center;border:1px solid #2c3a54;border-radius:12px;padding:10px;margin-bottom:8px;background:#0f1626}
-        .time{font-size:1.32rem;font-weight:800}
-        .meta{font-size:.85rem;color:var(--muted)}
-        .badge{padding:3px 8px;border-radius:999px;font-size:.72rem}
-        .on{background:#0f3d2b;color:#8ff0bd} .off{background:#4a1f28;color:#ffbac5}
-        .slider{width:100%}
-        .night-rows{display:grid;gap:6px}
-        .night-row{display:grid;grid-template-columns:56px 1fr 1fr;gap:8px;align-items:center}
-        .night-day{font-size:.85rem;color:#c8d8f5}
-        .hint{font-size:.8rem;color:var(--muted)}
-        @media(max-width:620px){.night-row{grid-template-columns:48px 1fr 1fr}}
-    </style>
-</head>
-<body>
-    <div class='wrap'>
-        <h1>Reveils PicoWake</h1>
-
-        <div class='card'>
-            <h2>Volume sonnerie</h2>
-            <input id='vol' class='slider' type='range' min='0' max='100'>
-            <div id='volTxt' class='meta'></div>
-        </div>
-
-        <div class='card'>
-            <h2>Mode nuit par jour</h2>
-            <div class='hint'>Chaque ligne est une nuit: 1ere heure = soir du 1er jour, 2eme heure = matin du jour suivant (ex: Sam-Dim).</div>
-            <div id='nightRows' class='night-rows'></div>
-            <div class='row' style='margin-top:10px;'>
-                <button id='nightBtn'>Enregistrer</button>
-                <span id='nightMsg' class='hint'></span>
-            </div>
-        </div>
-
-        <div class='card'>
-            <h2>Ajouter un reveil</h2>
-            <label>Heure</label><input id='time' type='time' value='07:00'>
-            <label style='margin-top:10px;'>Nom (optionnel)</label><input id='label' type='text' placeholder='Ex: Travail'>
-            <label style='margin-top:10px;'>Jours</label><div class='days' id='days'></div>
-            <div class='row' style='margin-top:12px;'><button id='addBtn'>Ajouter</button></div>
-        </div>
-
-        <div class='card'>
-            <h2>Mes reveils</h2>
-            <div id='list'></div>
-        </div>
-    </div>
-
-    <script>
-        const dayNames=['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
-        const daysEl=document.getElementById('days');
-        const nightRowsEl=document.getElementById('nightRows');
-        const nightMsgEl=document.getElementById('nightMsg');
-        const defaultWindow=()=>({startMinute:1260,endMinute:420});
-        const state={alarms:[],volume:70,nightWindows:Array.from({length:7},defaultWindow),settingsVersion:0};
-        let nightDirty=false;
-
-        for(let i=0;i<7;i++){
-            const l=document.createElement('label');
-            l.className='day';
-            l.innerHTML=`<input type='checkbox' data-day='${i}' ${(i>=1&&i<=5)?'checked':''}> ${dayNames[i]}`;
-            daysEl.appendChild(l);
-        }
-
-        for(let i=0;i<7;i++){
-            const row=document.createElement('div');
-            row.className='night-row';
-            const pairName=`${dayNames[i]}-${dayNames[(i+1)%7]}`;
-            row.innerHTML=`<div class='night-day'>${pairName}</div><input id='ns${i}' type='time'><input id='ne${i}' type='time'>`;
-            nightRowsEl.appendChild(row);
-            const startInput=document.getElementById(`ns${i}`);
-            const endInput=document.getElementById(`ne${i}`);
-            startInput.addEventListener('input',()=>{nightDirty=true;nightMsgEl.textContent='Modifications non enregistrees';});
-            endInput.addEventListener('input',()=>{nightDirty=true;nightMsgEl.textContent='Modifications non enregistrees';});
-        }
-
-        async function api(path,opt={}){
-            const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opt});
-            if(!r.ok) throw new Error(await r.text());
-            return r.json();
-        }
-
-        function minuteToTime(total){
-            const m=((Number(total)||0)%1440+1440)%1440;
-            const hh=String(Math.floor(m/60)).padStart(2,'0');
-            const mm=String(m%60).padStart(2,'0');
-            return `${hh}:${mm}`;
-        }
-
-        function timeToMinute(text){
-            const t=(text||'00:00').split(':').map(Number);
-            const h=Number.isFinite(t[0])?t[0]:0;
-            const m=Number.isFinite(t[1])?t[1]:0;
-            return Math.max(0,Math.min(1439,h*60+m));
-        }
-
-        function maskToText(m){
-            const out=[];
-            for(let i=0;i<7;i++) if(m&(1<<i)) out.push(dayNames[i]);
-            return out.length?out.join(' '):'Aucun jour';
-        }
-
-        function normalizeNightWindows(windows){
-            const out=Array.from({length:7},defaultWindow);
-            if(!Array.isArray(windows)) return out;
-            for(const it of windows){
-                const day=Number(it?.day);
-                if(day<0||day>6||!Number.isFinite(day)) continue;
-                out[day]={
-                    startMinute:Math.max(0,Math.min(1439,Number(it.startMinute)||0)),
-                    endMinute:Math.max(0,Math.min(1439,Number(it.endMinute)||0)),
-                };
-            }
-            return out;
-        }
-
-        function render(){
-            document.getElementById('vol').value=state.volume;
-            document.getElementById('volTxt').textContent=`${state.volume}%`;
-            const activeId=(document.activeElement&&document.activeElement.id)?document.activeElement.id:'';
-            const editingNight=/^n[se][0-6]$/.test(activeId);
-            if(!nightDirty&&!editingNight){
-                for(let i=0;i<7;i++){
-                    document.getElementById(`ns${i}`).value=minuteToTime(state.nightWindows[i].startMinute);
-                    document.getElementById(`ne${i}`).value=minuteToTime(state.nightWindows[i].endMinute);
-                }
-            }
-
-            const list=document.getElementById('list');
-            list.innerHTML='';
-            state.alarms.sort((a,b)=>(a.hour*60+a.minute)-(b.hour*60+b.minute));
-            for(const a of state.alarms){
-                const el=document.createElement('div');
-                el.className='alarm';
-                const hh=String(a.hour).padStart(2,'0');
-                const mm=String(a.minute).padStart(2,'0');
-                el.innerHTML=`<div><div class='time'>${hh}:${mm}</div><div class='meta'>${a.label||'Sans nom'} - ${maskToText(a.daysMask)}</div></div><div class='row'><span class='badge ${a.enabled?'on':'off'}'>${a.enabled?'Actif':'Off'}</span><button class='ghost' data-toggle='${a.id}'>${a.enabled?'Desactiver':'Activer'}</button><button class='danger' data-del='${a.id}'>Suppr</button></div>`;
-                list.appendChild(el);
-            }
-        }
-
-        async function refresh(){
-            const s=await api('/api/state');
-            state.alarms=s.alarms||[];
-            state.volume=s.volume||70;
-            state.settingsVersion=Number(s.settingsVersion)||0;
-            state.nightWindows=normalizeNightWindows(s.nightWindows);
-            render();
-        }
-
-        document.getElementById('addBtn').onclick=async()=>{
-            const t=document.getElementById('time').value||'07:00';
-            const [h,m]=t.split(':').map(Number);
-            let mask=0;
-            document.querySelectorAll('#days input').forEach(ch=>{ if(ch.checked) mask|=(1<<Number(ch.dataset.day)); });
-            const label=document.getElementById('label').value||'';
-            await api('/api/alarms',{method:'POST',body:JSON.stringify({hour:h,minute:m,daysMask:mask,label,enabled:true})});
-            document.getElementById('label').value='';
-            await refresh();
-        };
-
-        document.getElementById('vol').oninput=async(e)=>{
-            const value=Number(e.target.value);
-            state.volume=value;
-            document.getElementById('volTxt').textContent=`${value}%`;
-            await api('/api/volume',{method:'POST',body:JSON.stringify({value})});
-        };
-
-        document.getElementById('nightBtn').onclick=async()=>{
-            const windows=[];
-            for(let day=0;day<7;day++){
-                windows.push({
-                    day,
-                    startMinute:timeToMinute(document.getElementById(`ns${day}`).value),
-                    endMinute:timeToMinute(document.getElementById(`ne${day}`).value),
-                });
-            }
-            try{
-                await api('/api/night-window',{method:'POST',body:JSON.stringify({windows})});
-                nightDirty=false;
-                nightMsgEl.textContent='Enregistre';
-                await refresh();
-                setTimeout(()=>{if(!nightDirty){nightMsgEl.textContent='';}},1200);
-            }catch(err){
-                nightMsgEl.textContent='Erreur enregistrement';
-            }
-        };
-
-        document.getElementById('list').onclick=async(e)=>{
-            const t=e.target;
-            if(t.dataset.del){
-                await api('/api/alarms?id='+t.dataset.del,{method:'DELETE'});
-                await refresh();
-            }
-            if(t.dataset.toggle){
-                const id=Number(t.dataset.toggle);
-                const a=state.alarms.find(x=>x.id===id);
-                await api('/api/enabled',{method:'POST',body:JSON.stringify({id,enabled:!a.enabled})});
-                await refresh();
-            }
-        };
-
-        refresh();
-        setInterval(refresh,3000);
-    </script>
-</body>
-</html>
-)HTML"));
+    return String(kAppPageHtml); 
 }
 
 void AlarmScheduler::handleGetRoot() {
@@ -781,4 +566,28 @@ uint8_t AlarmScheduler::clampToByte(int value, uint8_t minVal, uint8_t maxVal) {
     if (value < minVal) return minVal;
     if (value > maxVal) return maxVal;
     return static_cast<uint8_t>(value);
+}
+
+void AlarmScheduler::handleGetServiceWorker() {
+    // Un simple Service Worker vide suffit pour valider les pré-requis d'installation de Chrome
+    String sw = "self.addEventListener('fetch', function(event) {});";
+    server_.send(200, "application/javascript", sw);
+}
+
+void AlarmScheduler::setupRoutes() {
+    server_.on("/", HTTP_GET, [this]() { handleGetRoot(); });
+    server_.on("/manifest.json", HTTP_GET, [this]() { handleGetManifest(); });
+    server_.on("/sw.js", HTTP_GET, [this]() { handleGetServiceWorker(); });  
+    
+    server_.on("/api/state", HTTP_GET, [this]() { handleGetState(); });
+    server_.on("/api/state", HTTP_GET, [this]() { handleGetState(); });
+    server_.on("/api/alarms", HTTP_POST, [this]() { handleCreateAlarm(); });
+    server_.on("/api/alarms", HTTP_PUT, [this]() { handleUpdateAlarm(); });
+    server_.on("/api/alarms", HTTP_DELETE, [this]() { handleDeleteAlarm(); });
+    server_.on("/api/volume", HTTP_POST, [this]() { handleSetVolume(); });
+    server_.on("/api/enabled", HTTP_POST, [this]() { handleSetEnabled(); });
+    server_.on("/api/night-window", HTTP_POST, [this]() { handleSetNightWindow(); });
+    server_.onNotFound([this]() {
+        server_.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}");
+    });
 }

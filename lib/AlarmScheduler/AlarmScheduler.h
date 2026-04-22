@@ -18,7 +18,9 @@ public:
     void snoozeRinging(uint32_t snoozeMinutes = 10);
     size_t activeEnabledCount() const;
     String currentRingingLabel() const;
-    bool hasSnooze() const;
+    bool hasSnooze() const; 
+    void handleGetManifest();
+    void handleGetServiceWorker();
     uint32_t snoozeRemainingSeconds() const;
     uint16_t nightStartMinuteForDay(uint8_t dayIndex) const;
     uint16_t nightEndMinuteForDay(uint8_t dayIndex) const;

@@ -605,33 +605,21 @@ static void drawRingingScreen(bool force) {
 
         tft.fillScreen(TFT_BLACK);
 
-        if (alarmLabel.length() > 0) {
-            tft.setTextDatum(MC_DATUM);
-            tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-            tft.setTextSize(1);
-            tft.drawString(alarmLabel, cx, h / 2 - 72, 2);
-        }
-
-        // Use custom 40pt font for the alarm clock, shifted upward for readability.
+        // Conserver la police custom existante pour l'heure, mais centrée a l'ecran.
         tft.setTextDatum(MC_DATUM);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
         tft.setFreeFont(&jgs_Font40pt7b);
         tft.setTextSize(1);
-        tft.drawString(clockText, cx, h / 2 - 20);
+        tft.drawString(clockText, cx - 6, h / 2 - 8);
         tft.setFreeFont(0);
 
-        const int btnW = 156;
-        const int btnH = 44;
-        const int btnX = (w - btnW) / 2;
-        const int btnY = h / 2 + 48;
-
-        // Bouton arrondi simple blanc
-        tft.fillRoundRect(btnX, btnY, btnW, btnH, 12, TFT_WHITE);
-        tft.drawRoundRect(btnX, btnY, btnW, btnH, 12, TFT_LIGHTGREY);
-
+        // Libelle alarme centré en haut.
         tft.setTextDatum(MC_DATUM);
-        tft.setTextColor(TFT_BLACK, TFT_WHITE);
-        tft.drawString("Arreter", cx, btnY + btnH / 2 + 3, 4);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.setTextSize(1);
+        tft.drawString(alarmLabel.length() > 0 ? alarmLabel : "Alarm", cx, 50, 2);
+
+        // Boutons Stop/Snooze retires de l'ecran de reveil.
 
         lastClock = clockText;
         lastLabel = alarmLabel;
@@ -758,9 +746,8 @@ void loop() {
     }
 
     if (hardware_snooze_rising_edge()) {
-        sSnoozePinkUntilMs = nowMs + kSnoozePinkDurationMs;
-        sScreenDirty = true;
         if (alarmScheduler.isRinging()) {
+            sSnoozePinkUntilMs = nowMs + kSnoozePinkDurationMs;
             alarmScheduler.snoozeRinging(10);
             sScreenDirty = true;
         }
