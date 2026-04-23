@@ -38,6 +38,7 @@ static constexpr uint16_t kNightBgColor = 0x0000;
 static constexpr uint16_t kSnoozePinkBgColor = 0x0000;
 static constexpr uint8_t kBacklightDay = 255;
 static constexpr uint8_t kBacklightNight = 28;
+static constexpr uint8_t kBacklightSnooze = 18;
 
 static FirstWifiProvisioning wifiProvisioning;
 static AlarmScheduler alarmScheduler;
@@ -286,7 +287,8 @@ static bool isScreenOffSchedule(const struct tm* ti) {
     if (!ti) {
         return false;
     }
-    return ti->tm_hour >= 22 || ti->tm_hour < 7;
+    // Screen-off window now follows the scheduler night window per day.
+    return isNightTime(ti);
 }
 
 static void applyBacklightImmediate(uint8_t level) {
@@ -342,21 +344,15 @@ static bool updateClockTheme() {
     const uint32_t nowMs = millis();
     const time_t nowTs = time(nullptr);
     const struct tm* ti = localtime(&nowTs);
-    const bool snoozeActive = alarmScheduler.hasSnooze();
     const bool pinkActive = (sSnoozePinkUntilMs > nowMs);
     const bool timeReady = sTimeInitialized && ti && ti->tm_year > 100;
 
     ClockTheme nextTheme = ClockTheme::Day;
-    // During active snooze countdown, force day mode for readability.
-    if (snoozeActive) {
-        nextTheme = ClockTheme::Day;
     // Snooze press must temporarily wake the screen, even during screen-off schedule.
-    } else if (pinkActive) {
+    if (pinkActive) {
         nextTheme = ClockTheme::SnoozePink;
     } else if (timeReady && isScreenOffSchedule(ti)) {
         nextTheme = ClockTheme::ScreenOff;
-    } else if (timeReady && isNightTime(ti)) {
-        nextTheme = ClockTheme::Night;
     }
 
     bool changed = false;
@@ -376,7 +372,7 @@ static bool updateClockTheme() {
         setBacklightTarget(kBacklightNight);
     } else if (sCurrentTheme == ClockTheme::SnoozePink) {
         changed = setVisualTheme(ClockTheme::SnoozePink) || changed;
-        setBacklightTarget(kBacklightDay);
+        setBacklightTarget(kBacklightSnooze);
     } else {
         changed = setVisualTheme(ClockTheme::Day) || changed;
         setBacklightTarget(kBacklightDay);
@@ -749,6 +745,7 @@ void loop() {
         if (alarmScheduler.isRinging()) {
             sSnoozePinkUntilMs = nowMs + kSnoozePinkDurationMs;
             alarmScheduler.snoozeRinging(10);
+            applyBacklightImmediate(kBacklightSnooze);
             sScreenDirty = true;
         }
     }
