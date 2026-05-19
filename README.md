@@ -1,5 +1,6 @@
 # PicoWake (Tomat'O-Clock) 🍅
 
+### Printables Link : [Here](https://www.printables.com/model/1691156-tomato-clock-rp2350-powered-alarm-clock)
 Meet **Tomat'O-Clock**, a smart, connected, tomato-shaped alarm clock! 
 
 This repository contains the source code and documentation for the PicoWake project. Built around a Raspberry Pi Pico 2 W and a touch screen, this project provides a fully configurable alarm clock with a Web UI, WiFi setup portal, and NTP time synchronization. 
@@ -8,11 +9,9 @@ The physical build features a capacitive touch sensor for dismissing alarms and 
 
 ## Features
 * **Captive WiFi Portal:** Easy network setup on first boot.
-* **NTP Time Sync:** Always keeps accurate time over the internet.
+* **NTP Time Sync:** Keeps accurate time over the internet.
 * **Local Web UI:** Set multiple alarms, adjust volume, and manage days directly from your browser.
-* **Touch Screen Interface:** Interactive local display.
 * **Custom Hardware Controls:** Capacitive touch to dismiss, mechanical switch to snooze.
-
 ---
 
 ## Setup & Flashing
@@ -24,6 +23,8 @@ The source code is written using the **Arduino framework** via **PlatformIO**.
 * Git
 
 ### Building and Flashing
+
+#### Method 1 : Custom Build
 1. Clone this repository:
    ```bash
    git clone https://github.com/FallMarsisus/PicoWake.git
@@ -32,7 +33,8 @@ The source code is written using the **Arduino framework** via **PlatformIO**.
 3. Plug your Raspberry Pi Pico 2 W into your computer via USB.
 4. Click the **"Upload"** arrow in the PlatformIO bottom toolbar to compile and flash the firmware.
 5. Once flashed, the Pico will restart. On the first boot, it will create a temporary WiFi Access Point. Connect to it with your phone or computer to configure your local WiFi credentials.
-
+#### Method 2 : Use prebuilt binary
+You can find pre-built binaries in the releases tab.
 ---
 
 ## Pinout & Wiring
@@ -50,7 +52,7 @@ The Pico is designed to be embedded directly into the back of the Waveshare scre
 
 ## Hardware & Bill of Materials (BOM)
 
-*(Note: For 3D printing files and physical assembly guides, please refer to the project's MakerWorld page).*
+*(Note: For 3D printing files and physical assembly guides, please refer to the project's MakerWorld/Printables page).*
 
 * **Microcontroller:** [Raspberry Pi Pico 2 W](https://www.raspberrypi.com/products/raspberry-pi-pico-2-w/) (A classic Pico W should also work).
 * **Display:** Waveshare Pico ResTouch LCD 2.8". The Pico plugs directly into its back.
