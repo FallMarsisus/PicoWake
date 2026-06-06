@@ -58,6 +58,7 @@ enum class UiScreen {
     Clock,
     WifiHelp,
     AlarmRinging,
+    Weather
 };
 
 static UiScreen sCurrentScreen = UiScreen::Loading;
@@ -92,6 +93,10 @@ static float sGeoLat = 0.0f;
 static float sGeoLon = 0.0f;
 static int sSunriseMinute = 7 * 60;
 static int sSunsetMinute = 20 * 60;
+static int sWeatherCode = -1;
+static float sTempMax = -99.0f;
+static float sTempMin = -99.0f;
+static uint32_t sWeatherDisplayUntilMs = 0; // Timer des 10 minutes
 static int sSunTimesYDay = -1;
 static bool sSunTimesValid = false;
 static uint32_t sLastSunFetchAttemptMs = 0;
@@ -155,7 +160,7 @@ static bool fetchSunTimesFromInternet() {
     url += String(sGeoLat, 6);
     url += "&longitude=";
     url += String(sGeoLon, 6);
-    url += "&daily=sunrise,sunset&timezone=auto&forecast_days=1";
+    url += "&daily=sunrise,sunset,weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1";
 
     HTTPClient http;
     if (!http.begin(url)) {
@@ -192,6 +197,12 @@ static bool fetchSunTimesFromInternet() {
 
     sSunriseMinute = sunriseMinute;
     sSunsetMinute = sunsetMinute;
+    
+    // Utilise "weather_code" pour correspondre à la documentation de l'API
+    sWeatherCode = doc["daily"]["weather_code"][0] | -1;
+    sTempMax = doc["daily"]["temperature_2m_max"][0] | -99.0f;
+    sTempMin = doc["daily"]["temperature_2m_min"][0] | -99.0f;
+    // ----------------------------------------
     sSunTimesValid = true;
     const time_t nowTs = time(nullptr);
     const struct tm* ti = localtime(&nowTs);
@@ -204,6 +215,18 @@ static bool fetchSunTimesFromInternet() {
                   sSunsetMinute / 60,
                   sSunsetMinute % 60);
     return true;
+}
+
+static String getWeatherDesc(int code) {
+    if (code < 0) return "Inconnu";
+    if (code == 0) return "Soleil";
+    if (code >= 1 && code <= 3) return "Nuageux";
+    if (code == 45 || code == 48) return "Brouillard";
+    if (code >= 51 && code <= 67) return "Pluie";
+    if (code >= 71 && code <= 77) return "Neige";
+    if (code >= 80 && code <= 82) return "Averses";
+    if (code >= 95) return "Orage";
+    return "Meteo instable";
 }
 
 static bool refreshSunTimesIfNeeded(uint32_t nowMs) {
@@ -509,6 +532,154 @@ static void drawSnoozeOverlay(bool force, uint32_t snoozeRemaining) {
     lastOverlayH = barH;
 }
 
+static void drawWeatherIcon(int cx, int cy, int code) {
+    if (code < 0) return; // Inconnu
+    
+    if (code == 0) { 
+        // ☀️ Soleil radieux
+        tft.fillCircle(cx, cy, 14, TFT_YELLOW);
+        tft.drawLine(cx, cy - 17, cx, cy - 24, TFT_YELLOW);
+        tft.drawLine(cx, cy + 17, cx, cy + 24, TFT_YELLOW);
+        tft.drawLine(cx - 17, cy, cx - 24, cy, TFT_YELLOW);
+        tft.drawLine(cx + 17, cy, cx + 24, cy, TFT_YELLOW);
+        tft.drawLine(cx - 12, cy - 12, cx - 17, cy - 17, TFT_YELLOW);
+        tft.drawLine(cx + 12, cy + 12, cx + 17, cy + 17, TFT_YELLOW);
+        tft.drawLine(cx - 12, cy + 12, cx - 17, cy + 17, TFT_YELLOW);
+        tft.drawLine(cx + 12, cy - 12, cx + 17, cy - 17, TFT_YELLOW);
+        
+    } else if (code >= 1 && code <= 3) { 
+        // ⛅ Nuageux / Éclaircies
+        if (code == 1 || code == 2) { 
+            tft.fillCircle(cx - 10, cy - 10, 12, TFT_YELLOW); // Soleil caché
+        }
+        tft.fillCircle(cx - 12, cy + 4, 10, TFT_LIGHTGREY);
+        tft.fillCircle(cx + 12, cy + 4, 10, TFT_LIGHTGREY);
+        tft.fillCircle(cx, cy - 4, 14, TFT_WHITE);
+        tft.fillRect(cx - 12, cy - 6, 24, 20, TFT_WHITE);
+        
+    } else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) { 
+        // 🌧️ Pluie
+        tft.fillCircle(cx - 12, cy, 10, TFT_DARKGREY);
+        tft.fillCircle(cx + 12, cy, 10, TFT_DARKGREY);
+        tft.fillCircle(cx, cy - 8, 14, TFT_LIGHTGREY);
+        tft.fillRect(cx - 12, cy - 10, 24, 20, TFT_LIGHTGREY);
+        tft.drawLine(cx - 10, cy + 12, cx - 14, cy + 22, TFT_CYAN);
+        tft.drawLine(cx,      cy + 12, cx - 4,  cy + 22, TFT_CYAN);
+        tft.drawLine(cx + 10, cy + 12, cx + 6,  cy + 22, TFT_CYAN);
+        
+    } else if (code >= 71 && code <= 77) { 
+        // ❄️ Neige
+        tft.fillCircle(cx - 12, cy, 10, TFT_DARKGREY);
+        tft.fillCircle(cx + 12, cy, 10, TFT_DARKGREY);
+        tft.fillCircle(cx, cy - 8, 14, TFT_LIGHTGREY);
+        tft.fillRect(cx - 12, cy - 10, 24, 20, TFT_LIGHTGREY);
+        tft.fillCircle(cx - 10, cy + 16, 2, TFT_WHITE);
+        tft.fillCircle(cx,      cy + 16, 2, TFT_WHITE);
+        tft.fillCircle(cx + 10, cy + 16, 2, TFT_WHITE);
+        
+    } else if (code >= 95) { 
+        // ⛈️ Orage
+        tft.fillCircle(cx - 12, cy, 10, TFT_DARKGREY);
+        tft.fillCircle(cx + 12, cy, 10, TFT_DARKGREY);
+        tft.fillCircle(cx, cy - 8, 12, TFT_DARKGREY);
+        tft.fillRect(cx - 12, cy - 10, 24, 20, TFT_DARKGREY);
+        tft.drawLine(cx, cy + 5, cx - 6, cy + 15, TFT_YELLOW);
+        tft.drawLine(cx - 6, cy + 15, cx + 2, cy + 15, TFT_YELLOW);
+        tft.drawLine(cx + 2, cy + 15, cx - 4, cy + 25, TFT_YELLOW);
+        
+    } else { 
+        // 🌫️ Brouillard
+        tft.drawFastHLine(cx - 15, cy - 5, 30, TFT_LIGHTGREY);
+        tft.drawFastHLine(cx - 10, cy + 2, 20, TFT_LIGHTGREY);
+        tft.drawFastHLine(cx - 18, cy + 9, 36, TFT_LIGHTGREY);
+    }
+}
+
+static void drawWeatherScreen(bool force) {
+    static String lastClockWeather = "";
+    static int lastWeatherCode = -999;
+    static int lastActiveCount = -1;
+    
+    String clockText = "--:--";
+    const time_t nowTs = time(nullptr);
+    const struct tm* timeinfo = localtime(&nowTs);
+    
+    if (timeinfo && timeinfo->tm_year > 100) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
+        clockText = String(buf);
+    }
+
+    const int activeCount = static_cast<int>(alarmScheduler.activeEnabledCount());
+    bool needRedraw = force || clockText != lastClockWeather || sWeatherCode != lastWeatherCode || activeCount != lastActiveCount;
+
+    if (needRedraw) {
+        // -- FOND --
+        // Haut (0 à 118) : Thème habituel
+        tft.fillRect(0, 0, tft.width(), 118, sClockBgColorActive);
+        // Bas (118 à 240) : Fond noir
+        tft.fillRect(0, 118, tft.width(), 125, TFT_BLACK);
+        
+        // Séparation
+        tft.drawFastHLine(0, 118, tft.width(), TFT_DARKGREY);
+        tft.drawFastHLine(0, 119, tft.width(), TFT_DARKGREY);
+
+        // -- HAUT : HEURE (Plus petite) --
+        tft.setTextColor(TFT_WHITE, sClockBgColorActive);
+        tft.setFreeFont(&jgs_Font30pt7b); // Police 30pt au lieu de 40pt
+        tft.setTextSize(1);
+        tft.setTextDatum(MC_DATUM); 
+        tft.drawString(clockText, tft.width() / 2, 58);
+
+        // -- HAUT : ALARMES (Haut à droite) --
+        tft.setFreeFont(0);
+        tft.setTextSize(2);
+        tft.setTextDatum(TR_DATUM);
+        tft.drawString(String(activeCount), 295, 4);
+        tft.drawBitmap(301, 4, image_clock_alarm_bits, 15, 16, TFT_WHITE);
+
+        // -- BAS : METEO --
+        if (sTempMax > -90.0f) {
+            // Icône Météo Vectorielle sur la gauche
+            drawWeatherIcon(50, 175, sWeatherCode);
+
+            tft.setFreeFont(0);
+            tft.setTextSize(2); 
+            tft.setTextDatum(TL_DATUM); // Alignement à gauche
+            
+            // Description météo (à droite de l'icône)
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.drawString(getWeatherDesc(sWeatherCode), 100, 145);
+
+            // Température Min (Bleu)
+            tft.setTextColor(TFT_CYAN, TFT_BLACK);
+            char bufMin[16];
+            snprintf(bufMin, sizeof(bufMin), "Min: %.1f", sTempMin);
+            tft.drawString(bufMin, 100, 170);
+
+            // Température Max (Orange)
+            tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+            char bufMax[16];
+            snprintf(bufMax, sizeof(bufMax), "Max: %.1f", sTempMax);
+            tft.drawString(bufMax, 100, 195); 
+            
+        } else {
+            tft.setFreeFont(0);
+            tft.setTextSize(2);
+            tft.setTextDatum(MC_DATUM);
+            tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+            tft.drawString("Recherche en cours...", tft.width() / 2, 175);
+        }
+
+        lastClockWeather = clockText;
+        lastWeatherCode = sWeatherCode;
+        lastActiveCount = activeCount;
+    }
+    
+    // -- HAUT : WIFI (Haut à gauche) --
+    drawWifiStatusIcon(needRedraw);
+}
+
 static void drawClockScreen(bool force, const String& clockText) {
     const int activeCount = static_cast<int>(alarmScheduler.activeEnabledCount());
     const bool snoozeVisible = alarmScheduler.hasSnooze();
@@ -682,21 +853,18 @@ static void setup_wifi_first_connection() {
 }
 
 static UiScreen decideScreen() {
-    if (alarmScheduler.isRinging()) {
-        return UiScreen::AlarmRinging;
-    }
-    if (kBypassWifiProvisioning) {
-        return UiScreen::Loading;
-    }
-    if (wifiProvisioning.isPortalActive()) {
-        return UiScreen::WifiHelp;
-    }
+    if (alarmScheduler.isRinging()) return UiScreen::AlarmRinging;
+    if (kBypassWifiProvisioning) return UiScreen::Loading;
+    if (wifiProvisioning.isPortalActive()) return UiScreen::WifiHelp;
     if (wifiProvisioning.isConnected()) {
-        return UiScreen::Clock;
+        if (sTimeInitialized) {
+            if (millis() < sWeatherDisplayUntilMs) {
+                return UiScreen::Weather;
+            }
+            return UiScreen::Clock;
+        }
     }
-    if (sTimeInitialized) {
-        return UiScreen::Clock;
-    }
+    if (sTimeInitialized) return UiScreen::Clock;
     return UiScreen::Loading;
 }
 
@@ -735,18 +903,41 @@ void loop() {
             if (alarmScheduler.isRinging()) {
                 alarmScheduler.dismissRinging();
                 sScreenDirty = true;
+                
+                // --- DECLENCHEMENT METEO ---
+                const time_t nowTs = time(nullptr);
+                const struct tm* ti = localtime(&nowTs);
+                // Si l'alarme est stoppée entre 6h00 et 11h59
+                if (ti && ti->tm_hour >= 6 && ti->tm_hour < 15) {
+                    sWeatherDisplayUntilMs = millis() + (10UL * 60UL * 1000UL); // 10 minutes
+                }
+                // ---------------------------
+                
             } else {
                 hardware_buzzer_beep(30);
             }
         }
     }
 
-    if (hardware_snooze_rising_edge()) {
+   if (hardware_snooze_rising_edge()) {
         if (alarmScheduler.isRinging()) {
+            // 1. Si une alarme sonne : on la reporte et on garde l'écran rose 10 secondes
             sSnoozePinkUntilMs = nowMs + kSnoozePinkDurationMs;
             alarmScheduler.snoozeRinging(10);
             applyBacklightImmediate(kBacklightSnooze);
             sScreenDirty = true;
+        } else {
+            // 2. Si aucune alarme ne sonne, on vérifie l'heure
+            const time_t nowTs = time(nullptr);
+            const struct tm* ti = localtime(&nowTs);
+            
+            // Si on est la nuit (écran éteint), on rallume temporairement l'écran
+            if (sTimeInitialized && ti && isScreenOffSchedule(ti)) {
+                sSnoozePinkUntilMs = nowMs + kSnoozePinkDurationMs;
+                applyBacklightImmediate(kBacklightSnooze);
+                sScreenDirty = true;
+            }
+            // Sinon (si c'est le jour), le code ne fait volontairement RIEN !
         }
     }
 
@@ -802,9 +993,10 @@ void loop() {
     }
     alarmScheduler.loop();
 
+    refreshSunTimesIfNeeded(nowMs);
+
     const bool ringingNow = alarmScheduler.isRinging();
     if (ringingNow && !sLastAlarmRinging) {
-        // Ensure the display wakes up immediately when alarm starts.
         applyBacklightImmediate(kBacklightDay);
         sScreenDirty = true;
     }
@@ -848,6 +1040,8 @@ void loop() {
         drawRingingScreen(sScreenDirty);
     } else if (sCurrentScreen == UiScreen::Loading) {
         drawLoadingScreen(sScreenDirty);
+    } else if (sCurrentScreen == UiScreen::Weather) { 
+        drawWeatherScreen(sScreenDirty);
     } else if (sCurrentScreen == UiScreen::Clock) {
         String clockText = "--:--";
         const time_t now = time(nullptr);

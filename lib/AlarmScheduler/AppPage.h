@@ -392,8 +392,8 @@ const char kAppPageHtml[] = R"HTML(
                 const s=await api('/api/state');
                 state.alarms=s.alarms||[]; state.volume=s.volume||70; 
                 state.nightWindows=Array.isArray(s.nightWindows) ? s.nightWindows : state.nightWindows;
-                // On évite de rafraichir si l'utilisateur est en train d'écrire dans la modale
-                if (!modal.open) render();
+                // On évite de rafraichir si la modale est ouverte OU si on édite la nuit
+                if (!modal.open && editNightDay === -1) render();
             } catch(e) {}
         }
 
